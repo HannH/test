@@ -1,7 +1,7 @@
 #coding:utf-8
 import os
 import time
-
+import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
 import vlib.plot as plot
@@ -55,23 +55,26 @@ class Train(object):
         # d_loss_r = tf.reduce_mean(tf.losses.sigmoid_cross_entropy(tf.ones_like(d_logits_r[:,:-1]),logits_r[:, :-1]))
         # d_loss_f = tf.reduce_mean(tf.losses.sigmoid_cross_entropy(tf.zeros_like(d_logits_f[:, -1]),logits_f[:, -1]))
         d_loss_r = tf.reduce_mean(
-            tf.nn.softmax_cross_entropy_with_logits_v2(labels=tf.ones_like(logits_r[:, :-1]),
-                                                       logits=d_logits_r[:, :-1]))
+            tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.zeros_like(logits_r[:, -1]),
+                                                       logits=d_logits_r[:, -1]))
         d_loss_f = tf.reduce_mean(
-            tf.nn.softmax_cross_entropy_with_logits_v2(labels=tf.zeros_like(logits_f[:, -1]), logits=d_logits_f[:, -1]))
+            tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.ones_like(logits_f[:, -1])*0.9, logits=d_logits_f[:, -1]))
+        d_loss_f1 = tf.reduce_mean(
+            tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.zeros_like(logits_f[:, -1]),
+                                                    logits=d_logits_f[:, -1]))
         # d_loss_r = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=un_label_r*0.9, logits=d_logits_r))
         # d_loss_f = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=un_label_f*0.9, logits=d_logits_f))
         # feature match
-        f_match = tf.constant(0., dtype=tf.float32)
+        f_match = []
         for i in range(4):
-            f_match += tf.reduce_mean(tf.multiply(layer_out_f[i]-layer_out_r[i], layer_out_f[i]-layer_out_r[i]))
+            f_match += [tf.reduce_mean(tf.multiply(layer_out_f[i]-layer_out_r[i], layer_out_f[i]-layer_out_r[i]))]
 
         # caculate the supervised loss
         s_label = tf.concat([self.label, tf.zeros(shape=(self.batch_size,1))], axis=1)
-        s_l_r = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=s_label*0.9, logits=d_logits_r))
+        s_l_r = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=s_label, logits=d_logits_r))
         self.d_l_1, self.d_l_2 = d_loss_r + d_loss_f, s_l_r
-        self.d_loss = d_loss_r + d_loss_f + s_l_r*self.flag*10 + d_regular
-        self.g_loss = d_loss_f + 0.01*f_match
+        self.d_loss = d_loss_r + d_loss_f + s_l_r*self.flag+d_regular
+        self.g_loss = d_loss_f1+0.1*tf.reduce_mean(f_match,0)
 
         all_vars = tf.global_variables()
         g_vars = [v for v in all_vars if 'gen' in v.name]
@@ -121,36 +124,39 @@ class Train(object):
         # define the network
         self.G_img = self.generator('gen', self.z, reuse=False)
         d_logits_r1, d_logits_r11,d_logits_r12 = self.discriminator_with_dropout('dis', self.x, reuse=False)
-        d_logits_r2, d_logits_r21,_ = self.discriminator_with_dropout('dis', self.x, reuse=False)
+        d_logits_r2, d_logits_r21,_ = self.discriminator_with_dropout('dis', self.x, reuse=True)
         d_logits_f, _ ,d_logits_f2 = self.discriminator_with_dropout('dis', self.G_img, reuse=True)
 
         d_regular = tf.add_n(tf.get_collection('regularizer', 'dis'), 'loss')  # D regular loss
         # caculate the unsupervised loss
         logits_r, logits_f = tf.nn.softmax(d_logits_r1), tf.nn.softmax(d_logits_f)
         d_loss_r = tf.reduce_mean(
-            tf.nn.softmax_cross_entropy_with_logits_v2(labels=tf.ones_like(logits_r[:, :-1]), logits=d_logits_r1[:, :-1]))
+            tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.zeros_like(logits_r[:, -1]), logits=d_logits_r1[:, -1]))
         d_loss_f = tf.reduce_mean(
-            tf.nn.softmax_cross_entropy_with_logits_v2(labels=tf.zeros_like(logits_f[:, -1]), logits=d_logits_f[:, -1]))
+            tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.ones_like(logits_f[:, -1]), logits=d_logits_f[:, -1]))
         loss_ct=tf.square(d_logits_r1-d_logits_r2)
         loss_ct_=0.1*tf.reduce_mean(tf.square(d_logits_r11-d_logits_r21))
         CT=loss_ct+loss_ct_
         # feature match
         # caculate the supervised loss
         s_label = tf.concat([self.label, tf.zeros(shape=(self.batch_size,1))], axis=1)
-        s_l_r = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=s_label*0.9, logits=d_logits_r1))
+        s_l_r = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=s_label, logits=d_logits_r1))
         self.d_l_1, self.d_l_2 = d_loss_r + d_loss_f, s_l_r
-        self.d_loss = d_loss_r + d_loss_f + s_l_r*self.flag*10 +0.1*tf.reduce_mean(CT)
-        self.g_loss = tf.reduce_mean(tf.square(d_logits_f2-d_logits_r12))
-
+        self.d_loss = d_loss_r + d_loss_f + s_l_r*self.flag +0.1*tf.reduce_mean(CT)
+        self.g_loss = tf.square(tf.reduce_mean(d_logits_f2,0)-tf.reduce_mean(d_logits_r12,0))
         all_vars = tf.global_variables()
         for v in all_vars:
             print(v)
-        test_logits, _,_,_ = self.discriminator_with_dropout('dis', self.x, reuse=True,keep_prob=1.0)
+        all_vars = tf.global_variables()
+        g_vars = [v for v in all_vars if 'gen' in v.name]
+        d_vars = [v for v in all_vars if 'dis' in v.name]
+        self.opt_d = tf.train.AdamOptimizer(self.lr).minimize(self.d_loss, var_list=d_vars)
+        self.opt_g = tf.train.AdamOptimizer(self.lr).minimize(self.g_loss, var_list=g_vars)
+        test_logits, _,_ = self.discriminator_with_dropout('dis', self.x, reuse=True,keep_prob=1.0)
         test_logits = tf.nn.softmax(test_logits)
-        temp = tf.reshape(test_logits[:, -1],shape=[self.batch_size, 1])
-        for i in range(10):
-            temp = tf.concat([temp, tf.reshape(test_logits[:, -1],shape=[self.batch_size, 1])], axis=1)
-        test_logits -= temp
+        # temp = tf.reshape(test_logits[:, -1],shape=[self.batch_size, 1])
+        # for i in range(10):
+        #     temp = tf.concat([temp, tf.reshape(test_logits[:, -1],shape=[self.batch_size, 1])], axis=1)
         self.prediction = tf.nn.in_top_k(test_logits, tf.argmax(s_label, axis=1), 1)
 
         self.saver = tf.train.Saver()
@@ -161,7 +167,6 @@ class Train(object):
             self.saver.restore(self.sess, os.getcwd()+'/model_saved/model.ckpt')
             print('model load done')
         self.sess.graph.finalize()
-
     def train(self):
         if not os.path.exists('model_saved'):
             os.mkdir('model_saved')
@@ -171,24 +176,21 @@ class Train(object):
         temp = 0.80
         print('training')
         indexrange = list(range(self.batch_size * self.label_num))
+        g_opt = [self.opt_g, self.g_loss]
+        d_opt = [self.opt_d, self.d_loss, self.d_l_1, self.d_l_2]
         for epoch in range(self.EPOCH):
             # iters = int(156191//self.batch_size)
             iters = 50000//self.batch_size
-            flag2 = 1  # if epoch>10 else 0
             true_batchx, true_batchl = mnist.train.next_batch(self.batch_size * self.label_num)
             for idx in range(iters):
-                start_t = time.time()
-                flag = 1 if idx < self.label_num else 0 # set we use 2*batch_size=200 train data labeled.
+                flag = 1 if idx < self.label_num and epoch==0 else 0 # set we use 2*batch_size=200 train data labeled.
                 batchx, batchl = mnist.train.next_batch(self.batch_size)
-                # batchx, batchl = self.sess.run([batchx, batchl])
-                g_opt = [self.opt_g, self.g_loss]
-                d_opt = [self.opt_d, self.d_loss, self.d_l_1, self.d_l_2]
-                # if np.random.rand()>0.1:
-                # feed = {self.x:batchx, self.z:noise, self.label:batchl, self.flag:flag, self.flag2:flag2}
-                # else :
-                np.random.shuffle(indexrange)
-                feed = {self.x:true_batchx[indexrange[:self.batch_size]],
-                        self.z:noise, self.label:true_batchl[indexrange[:self.batch_size]], self.flag:1, self.flag2:flag2}
+                if np.random.rand()>1:
+                    feed = {self.x:batchx, self.z:noise, self.label:batchl, self.flag:0}
+                else :
+                    np.random.shuffle(indexrange)
+                    feed = {self.x:true_batchx[indexrange[:self.batch_size]],
+                            self.z:noise, self.label:true_batchl[indexrange[:self.batch_size]], self.flag:1}
                 # update the Discrimater k times
                 _, loss_d, d1,d2 = self.sess.run(d_opt, feed_dict=feed)
                 # update the Generator one time
@@ -237,6 +239,7 @@ class Train(object):
             output = tf.nn.relu(self.bn('g_bn4', output))
 
             output = deconv2d('g_dcon4', output, 5, outshape=[l, 32, 32, self.dim])
+            output=tf.sigmoid(output)
             output = tf.image.resize_images(output, (28, 28))
             # output = tf.nn.relu(self.bn('g_bn4', output))
             return tf.nn.tanh(output)

@@ -1,0 +1,4 @@
+label_probability=1
+lr=1e-4
+model=nogan
+change labeled image every epoch

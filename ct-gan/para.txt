@@ -1,0 +1,4 @@
+label_probability=0.5
+lr=1e-5
+model=ct-gan
+change labeled image every epoch
